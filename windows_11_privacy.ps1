@@ -26,6 +26,9 @@
 # ===========================
 $ErrorActionPreference = 'Stop'
 $FirewallRulePrefix = 'PrivacyBlock-'
+$SupportsFqdn = ($null -ne (Get-Command New-NetFirewallRule).Parameters['RemoteFqdn'])
+$HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+$HostsMarker = '# PRIVACY-FQDN-BLOCK'
 
 function Write-Info($msg){ Write-Host "[*] $msg" }
 function Write-OK($msg){ Write-Host "[OK] $msg" }
@@ -57,11 +60,15 @@ if (-not (Test-Admin)) {
 
 # ---- Validate that this is Windows 11 ----
 function Is-Win11 {
-  try {
-    $os = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-    return ($os.ProductName -match 'Windows 11')
-  } catch { return $false }
+    try {
+        $os = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+        $pn    = [string]$os.ProductName
+        $build = [int]$os.CurrentBuild      # or [int]$os.CurrentBuildNumber
+        $isClient = ($pn -notmatch 'Server')
+        return ($isClient -and $build -ge 22000)  # 22000+ == Windows 11
+    } catch { return $false }
 }
+
 if (-not (Is-Win11)) {
   $os = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
   Write-FAIL "This script is intended only for Windows 11. Detected: $($os.ProductName)"
@@ -172,20 +179,46 @@ function Enable-TaskPath($TaskPath){
   if ($tasks) { $tasks | ForEach-Object { Enable-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue | Out-Null } }
 }
 
-function Add-BlockFQDN($fqdn){
-  $name = "$FirewallRulePrefix$fqdn"
-  if (-not (Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $name -Direction Outbound -Action Block -RemoteFqdn $fqdn -Protocol Any -Profile Any | Out-Null
+function Add-BlockDomain {
+  param([Parameter(Mandatory=$true)][string]$Domain)
+
+  if ($SupportsFqdn) {
+    $rule = "$FirewallRulePrefix$Domain"
+    if (-not (Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue)) {
+      New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -Profile Any -RemoteFqdn $Domain | Out-Null
+      Write-OK "Firewall FQDN block: $Domain"
+    }
+  } else {
+    if (-not (Test-Path $HostsPath)) { throw "Hosts file not found: $HostsPath" }
+    $line4 = "0.0.0.0 $Domain $HostsMarker"
+    $line6 = ":: $Domain $HostsMarker"
+    $hosts = Get-Content $HostsPath -ErrorAction Stop
+    if ($hosts -notcontains $line4) { Add-Content -Path $HostsPath -Value $line4 }
+    if ($hosts -notcontains $line6) { Add-Content -Path $HostsPath -Value $line6 }
+    Write-OK "Hosts-block: $Domain"
   }
 }
-function Remove-BlockFQDN($fqdn){
-  $name = "$FirewallRulePrefix$fqdn"
-  $r = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
-  if ($r){ $r | Remove-NetFirewallRule | Out-Null }
+
+function Remove-BlockDomain {
+  param([Parameter(Mandatory=$true)][string]$Domain)
+
+  if ($SupportsFqdn) {
+    $rule = "$FirewallRulePrefix$Domain"
+    $r = Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue
+    if ($r) { $r | Remove-NetFirewallRule | Out-Null; Write-OK "Firewall unblocked: $Domain" }
+  } else {
+    if (Test-Path $HostsPath) {
+      $escaped = [regex]::Escape($Domain)
+      (Get-Content $HostsPath) |
+        Where-Object { $_ -notmatch "^\s*(0\.0\.0\.0|::)\s+$escaped\s+$([regex]::Escape($HostsMarker))\s*$" } |
+        Set-Content $HostsPath
+      Write-OK "Hosts-unblock: $Domain"
+    }
+  }
 }
 
 function Prompt-YesNo($message, $defaultYes=$true){
-  $suffix = $defaultYes ? "[Y/n]" : "[y/N]"
+  $suffix = if ($defaultYes) { "[Y/n]" } else { "[y/N]" }
   while ($true){
     $resp = Read-Host "$message $suffix"
     if ([string]::IsNullOrWhiteSpace($resp)) { return $defaultYes }
@@ -215,7 +248,7 @@ function Prompt-BackupChoice {
 # ===========================
 # Optional transcript
 # ===========================
-if (Prompt-YesNo "Start transcript logging to .\\Windows_11_Privacy.log?" $true) {
+if (Prompt-YesNo "Start transcript logging to .\\Windows_11_Privacy.log?" $false) {
   try { Start-Transcript -Path "$PSScriptRoot\Windows_11_Privacy.log" -Append | Out-Null } catch { Write-FAIL "Transcript failed: $($_.Exception.Message)" }
 }
 
@@ -239,12 +272,27 @@ if ($DefenderAvailable -and $DefenderTamperOn) {
 # Mode selection
 # ===========================
 Write-STEP "Mode selection"
-$modeDisable = $true
-if (Prompt-YesNo "Apply DISABLE-hardening settings? Choose No to ENABLE/undo them." $true) {
-  $modeDisable = $true; Write-Info "Mode: DISABLE (harden/strip)."
-} else {
-  $modeDisable = $false; Write-Info "Mode: ENABLE (restore/default)."
+
+function Select-Mode {
+    while ($true) {
+        $resp = Read-Host "Apply DISABLE-hardening settings? Choose No to ENABLE/undo them. Or Q to Quit [Y/n/q]"
+        if ([string]::IsNullOrWhiteSpace($resp)) {
+            Write-Info "Mode: DISABLE (harden/strip)."
+            return $true
+        }
+        switch ($resp.Trim().ToLower()) {
+            'y' { Write-Info "Mode: DISABLE (harden/strip)."; return $true }
+            'yes' { Write-Info "Mode: DISABLE (harden/strip)."; return $true }
+            'n' { Write-Info "Mode: ENABLE (restore/default)."; return $false }
+            'no' { Write-Info "Mode: ENABLE (restore/default)."; return $false }
+            'q' { Write-FAIL "User chose to quit."; exit 0 }
+            'quit' { Write-FAIL "User chose to quit."; exit 0 }
+            default { Write-Host "Enter y, n, or q." }
+        }
+    }
 }
+
+$modeDisable = Select-Mode
 
 
 # ===========================
@@ -271,7 +319,7 @@ function Telemetry-Disable {
   }
   # Explicit CEIP Consolidator
   Invoke-Safely { Disable-ScheduledTask -TaskPath '\\Microsoft\\Windows\\Customer Experience Improvement Program\\' -TaskName 'Consolidator' -ErrorAction SilentlyContinue | Out-Null } "Task disabled: CEIP Consolidator"
-  foreach($h in $TelemetryHosts){ Invoke-Safely { Add-BlockFQDN $h } "Firewall block: $h" }
+  foreach($h in $TelemetryHosts){ Invoke-Safely { Add-BlockDomain $h } "Firewall block: $h" }
   # Optional: WER policy off
   Invoke-Safely { Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting' 'Disabled' 'DWord' 1 } "Policy: Windows Error Reporting disabled"
 }
@@ -289,7 +337,7 @@ function Telemetry-Enable {
     Invoke-Safely { Enable-TaskPath $p } "Tasks enabled: $p"
   }
   Invoke-Safely { Enable-ScheduledTask -TaskPath '\\Microsoft\\Windows\\Customer Experience Improvement Program\\' -TaskName 'Consolidator' -ErrorAction SilentlyContinue | Out-Null } "Task enabled: CEIP Consolidator"
-  foreach($h in $TelemetryHosts){ Invoke-Safely { Remove-BlockFQDN $h } "Firewall unblocked: $h" }
+  foreach($h in $TelemetryHosts){ Invoke-Safely { Remove-BlockDomain $h } "Firewall unblocked: $h" }
   # Clear WER policy
   Invoke-Safely { Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting' -Recurse -Force -ErrorAction SilentlyContinue } "Policy cleared: Windows Error Reporting"
 }
@@ -464,13 +512,13 @@ function Run-Step {
 # ===========================
 # Execute
 # ===========================
-Run-Step -Title "1) Telemetry" -DisableAction { Telemetry-Disable } -EnableAction { Telemetry-Enable }
-Run-Step -Title "2) Ads / Recommendations" -DisableAction { Ads-Disable } -EnableAction { Ads-Enable } -AfterAdsRestart
-Run-Step -Title "3) Microsoft Account prompts/addition" -DisableAction { MSA-Disable } -EnableAction { MSA-Enable }
-Run-Step -Title "4) Defender cloud features" -DisableAction { Defender-Disable } -EnableAction { Defender-Enable }
-Run-Step -Title "5) Activity History & Location" -DisableAction { ActivityLocation-Disable } -EnableAction { ActivityLocation-Enable }
+Run-Step -Title "1) Telemetry: DiagTrack, tasks, minimal firewall blocks" -DisableAction { Telemetry-Disable } -EnableAction { Telemetry-Enable }
+Run-Step -Title "2) Ads / Recommendations: Start menu, lock screen, Settings banners" -DisableAction { Ads-Disable } -EnableAction { Ads-Enable } -AfterAdsRestart
+Run-Step -Title "3) Microsoft Account prompts/addition: OOBE and post-setup nudges" -DisableAction { MSA-Disable } -EnableAction { MSA-Enable }
+Run-Step -Title "4) Defender cloud features: MAPS, sample submission" -DisableAction { Defender-Disable } -EnableAction { Defender-Enable }
+Run-Step -Title "5) Activity History & Location: Timeline, global location service" -DisableAction { ActivityLocation-Disable } -EnableAction { ActivityLocation-Enable }
 
-Write-STEP "Completed"
+Write-STEP "Completed successfully."
 Write-Info ("Mode: {0}" -f ($(if($modeDisable){'DISABLE'} else {'ENABLE'})))
-Write-Info "Some changes require sign-out or reboot."
+Write-Info "Some changes require sign-out or reboot to take effect."
 try { Stop-Transcript | Out-Null } catch {}
