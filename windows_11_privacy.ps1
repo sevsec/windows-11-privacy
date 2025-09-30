@@ -11,7 +11,7 @@
 
   How to run with sufficient permissions:
     1) Press Start, type "PowerShell".
-    2) Right-click "Windows PowerShell" or "Windows Terminal" â†’ "Run as administrator".
+    2) Right-click "Windows PowerShell" or "Windows Terminal" -> "Run as administrator".
     3) Optional per-session policy:  Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
     4) Execute:  .\windows_11_privacy.ps1
 
@@ -51,8 +51,8 @@ function Test-Admin {
 
 if (-not (Test-Admin)) {
   Write-FAIL "Insufficient permissions. This script requires an elevated PowerShell."
-  Write-Host "`nRun as Administrator:"
-  Write-Host "  1) Start â†’ type 'PowerShell' â†’ right-click â†’ 'Run as administrator'."
+  Write-Host "Run as Administrator:"
+  Write-Host "  1) Start -> type 'PowerShell' -> right-click 'Run as administrator'."
   Write-Host "  2) Optional: Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process"
   Write-Host "  3) Re-run: .\\windows_11_privacy.ps1"
   exit 1
@@ -264,7 +264,7 @@ try {
   if ($mp.IsTamperProtected) { $DefenderTamperOn = $true }
 } catch {}
 if ($DefenderAvailable -and $DefenderTamperOn) {
-  Write-FAIL "Defender Tamper Protection is ON. Disable it: Windows Security â†’ Virus & threat protection â†’ Manage settings."
+  Write-FAIL "Defender Tamper Protection is ON. Disable it: Windows Security -> Virus & threat protection -> Manage settings."
 }
 
 
