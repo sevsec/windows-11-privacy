@@ -16,7 +16,7 @@ Interactive PowerShell script to disable (or re-enable) intrusive Windows 11 fea
 - Supports logging via optional transcript file written to the script directory.
 
 ## Usage
-1. Download `Win11_Privacy_Tuner.ps1`.
+1. Download `windows_11_privacy.ps1`.
 2. Open a PowerShell prompt with Administrator privileges.
 3. Allow script execution for the session:
    ```powershell
@@ -24,7 +24,7 @@ Interactive PowerShell script to disable (or re-enable) intrusive Windows 11 fea
    ```
 4. Run the script:
    ```powershell
-   .\Win11_Privacy_Tuner.ps1
+   .\windows_11_privacy.ps1
    ```
 5. Select the features that you would like to disable/re-renable by following the script's prompts.
    
