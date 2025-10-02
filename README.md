@@ -12,8 +12,11 @@ Interactive PowerShell script to disable (or re-enable) intrusive Windows 11 fea
 - Lets you choose **DISABLE** (harden/strip) or **ENABLE** (restore defaults).
 - If in DISABLE mode, presents safety options: proceed directly, create a **snapshot backup**, create a **system restore point**, or do both.
 - Prompts at each step to **apply** or **skip** the feature change.
-- Prints `[OK]` or `[X]` for each action so you can track what happened.
+- Tracks success or failure (`[OK]` or `[X]`) for each action.
 - Supports logging via optional transcript file written to the script directory.
+- Offers two additional backup options:
+  - Snapshot
+  - System Restore Point
 
 ## Usage
 1. Download `windows_11_privacy.ps1`.
